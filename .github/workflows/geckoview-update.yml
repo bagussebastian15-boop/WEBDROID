@@ -1,0 +1,33 @@
+name: Cek update GeckoView
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"   # tiap Senin
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bandingkan versi
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CURRENT=$(grep '^geckoviewVersion=' gradle.properties | cut -d= -f2)
+          LATEST=$(curl -fsSL https://maven.mozilla.org/maven2/org/mozilla/geckoview/geckoview-arm64-v8a/maven-metadata.xml \
+            | grep -oP '(?<=<version>)[^<]+' | sort -V | tail -1)
+          echo "Saat ini: $CURRENT | Terbaru: $LATEST"
+          if [ -n "$LATEST" ] && [ "$CURRENT" != "$LATEST" ]; then
+            EXISTING=$(gh issue list --search "GeckoView $LATEST in:title" --json number --jq length)
+            if [ "$EXISTING" = "0" ]; then
+              gh issue create \
+                --title "Update GeckoView ke $LATEST" \
+                --body "Versi di gradle.properties: \`$CURRENT\`. Versi terbaru: \`$LATEST\`. Ubah \`geckoviewVersion\`, lalu cek build.yml lulus."
+            fi
+          fi
