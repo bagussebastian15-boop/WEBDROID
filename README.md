@@ -9,6 +9,7 @@ Browser Android **sangat ringan** berbasis WebView sistem, untuk HP jadul (Andro
 - Bookmark: tambah, ubah judul, hapus, buka di tab baru, tampil sebagai kotak di beranda
 - Beranda kustom: judul, warna, mesin pencari, tampil bookmark, atau pakai halaman web sendiri
 - Video: tombol fullscreen situs memutar otomatis ke landscape; tombol "Video" memaksa video apa pun layar penuh landscape
+- Mode Ultra Ringan (satu ketukan): blokir gambar, iklan, autoplay, dan Facebook dialihkan ke m.facebook.com. Juga ada JavaScript per situs dan pilihan tampilan HP/Desktop
 - Download manager (DownloadManager Android), hapus data penjelajahan
 
 ## Build
