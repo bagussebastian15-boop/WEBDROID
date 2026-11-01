@@ -66,6 +66,7 @@ class MainActivity : AppCompatActivity() {
         btnBookmark = findViewById(R.id.btnBookmark)
         bookmarks = BookmarkStore(this)
 
+        showLastCrashIfAny()
         requestRuntimePermissions()
         setupExtensionPrompt()
         setupUi()
@@ -73,7 +74,11 @@ class MainActivity : AppCompatActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 val t = current
-                if (t != null && t.canGoBack) t.session.goBack() else finish()
+                if (urlBar.hasFocus()) {
+                    urlBar.clearFocus()
+                    (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+                        .hideSoftInputFromWindow(urlBar.windowToken, 0)
+                } else if (t != null && t.canGoBack) t.session.goBack() else finish()
             }
         })
 
@@ -129,6 +134,19 @@ class MainActivity : AppCompatActivity() {
         btnBookmark.text = if (t != null && bookmarks.contains(t.url)) "★" else "☆"
     }
 
+    private fun showLastCrashIfAny() {
+        val f = RinganApp.crashFile(application)
+        if (!f.exists()) return
+        val log = try { f.readText() } catch (_: Exception) { return }
+        f.delete()
+        AlertDialog.Builder(this)
+            .setTitle("Aplikasi sebelumnya crash")
+            .setMessage(log.take(3000))
+            .setPositiveButton("Salin") { _, _ -> copyText(log) }
+            .setNegativeButton("Tutup", null)
+            .show()
+    }
+
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
 
     private fun requestRuntimePermissions() {
@@ -151,6 +169,14 @@ class MainActivity : AppCompatActivity() {
 
             override fun onCloseRequest(s: GeckoSession) {
                 closeTab(tab)
+            }
+
+            override fun onCrash(s: GeckoSession) {
+                recoverTab(tab, "Halaman crash, dimuat ulang")
+            }
+
+            override fun onKill(s: GeckoSession) {
+                recoverTab(tab, "Halaman dihentikan sistem (memori), dimuat ulang")
             }
 
             override fun onExternalResponse(s: GeckoSession, response: WebResponse) {
@@ -242,6 +268,20 @@ class MainActivity : AppCompatActivity() {
         if (!urlBar.hasFocus()) urlBar.setText(tab.url)
         progressBar.progress = tab.progress
         updateNavButtons()
+    }
+
+    private fun recoverTab(tab: Tab, msg: String) {
+        mainHandler.post {
+            toast(msg)
+            val url = tab.url.ifBlank { HOME }
+            try {
+                if (!tab.session.isOpen) tab.session.open(runtime)
+                if (current === tab) geckoView.setSession(tab.session)
+                tab.session.loadUri(url)
+            } catch (e: Exception) {
+                toast("Gagal memulihkan tab: ${e.message}")
+            }
+        }
     }
 
     private fun openInNewTab(url: String) {
