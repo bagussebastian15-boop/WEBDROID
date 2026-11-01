@@ -22,7 +22,27 @@ jobs:
           gradle-version: "8.7"
 
       - name: Build debug APK
-        run: gradle assembleDebug --stacktrace
+        run: |
+          set -o pipefail
+          gradle assembleDebug --stacktrace --console=plain 2>&1 | tee build.log
+
+      # Jika gagal: tampilkan error ringkas di tab Annotations / Summary (mudah dibaca di HP)
+      - name: Ringkas error
+        if: failure()
+        run: |
+          {
+            echo '### Error build'
+            echo '```'
+            grep -E "^e: |error: |What went wrong|Execution failed|AAPT|Could not|not found|does not contain" -A2 build.log | head -60 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -E "^e: |error: |What went wrong" -A1 build.log | head -12 | while IFS= read -r l; do echo "::error::$l"; done || true
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: build-log
+          path: build.log
 
       - uses: actions/upload-artifact@v4
         with:
