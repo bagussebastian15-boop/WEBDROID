@@ -73,6 +73,10 @@ class MainActivity : Activity() {
             HomeTheme("Ungu", "#4a148c", "#ffffff", "#6a1b9a"),
             HomeTheme("Krem", "#fff8e1", "#3e2723", "#ffecb3")
         )
+        val FB_HOSTS = setOf(
+            "facebook.com", "www.facebook.com", "web.facebook.com",
+            "touch.facebook.com", "mbasic.facebook.com"
+        )
         val ENGINE_NAMES = arrayOf("DuckDuckGo Lite", "Google", "Bing", "Brave")
         val ENGINE_ACTIONS = arrayOf(
             "https://duckduckgo.com/lite/",
@@ -286,16 +290,26 @@ class MainActivity : Activity() {
         s.loadWithOverviewMode = true
         s.allowFileAccess = false
         s.allowContentAccess = false
-        s.mediaPlaybackRequiresUserGesture = true
+        s.mediaPlaybackRequiresUserGesture = prefs.getBoolean("blockAutoplay", true)
         s.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
         s.cacheMode = WebSettings.LOAD_DEFAULT
         s.setGeolocationEnabled(false)
         s.blockNetworkImage = dataSaver
+        if (prefs.getBoolean("desktop", false)) s.userAgentString = desktopUa()
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, false)
 
         w.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val u = request.url
+                if (request.isForMainFrame && (u.scheme == "http" || u.scheme == "https")) {
+                    val orig = u.toString()
+                    val nu = rewrite(orig)
+                    applyJs(view, nu)
+                    if (nu != orig) {
+                        view.loadUrl(nu)
+                        return true
+                    }
+                }
                 return when (u.scheme) {
                     null, "http", "https", "about", "data", "blob", "javascript", "ringan" -> false
                     else -> {
@@ -413,16 +427,153 @@ class MainActivity : Activity() {
 
     private fun loadUrl(u: String) {
         val custom = prefs.getString("homeUrl", "") ?: ""
-        val target = if (u == HOME_MARK && custom.isNotBlank()) custom else u
+        var target = if (u == HOME_MARK && custom.isNotBlank()) custom else u
+        if (target != HOME_MARK) target = rewrite(target)
         current?.url = target
         val w = web ?: return
         if (target == HOME_MARK) {
             w.loadDataWithBaseURL(HOME_MARK, buildHomeHtml(), "text/html", "utf-8", HOME_MARK)
             if (!urlBar.hasFocus()) urlBar.setText("")
         } else {
+            applyJs(w, target)
             w.loadUrl(target)
         }
         updateTabsUi()
+    }
+
+    // ------------------------------------------------------------------ mode ultra ringan
+
+    private fun onOff(b: Boolean) = if (b) "AKTIF" else "mati"
+
+    private fun hostKey(url: String?): String? {
+        if (url.isNullOrBlank() || url == HOME_MARK) return null
+        return Uri.parse(url).host?.removePrefix("www.")
+    }
+
+    private fun jsOffHosts(): Set<String> = prefs.getStringSet("jsOff", emptySet()) ?: emptySet()
+
+    private fun applyJs(w: WebView, url: String?) {
+        val h = hostKey(url)
+        w.settings.javaScriptEnabled = h == null || !jsOffHosts().contains(h)
+    }
+
+    /** Alihkan Facebook ke situs mobile m.facebook.com (jika opsinya aktif). */
+    private fun rewrite(url: String): String {
+        if (!prefs.getBoolean("fbRedirect", false) || prefs.getBoolean("desktop", false)) return url
+        val u = Uri.parse(url)
+        val h = u.host ?: return url
+        if (h !in FB_HOSTS) return url
+        return u.buildUpon().authority("m.facebook.com").build().toString()
+    }
+
+    private fun desktopUa(): String =
+        WebSettings.getDefaultUserAgent(this)
+            .replace(Regex("\\(Linux; Android[^)]*\\)"), "(X11; Linux x86_64)")
+            .replace(" Mobile", "")
+
+    private fun applyWebSettings() {
+        val w = web ?: return
+        val s = w.settings
+        s.blockNetworkImage = dataSaver
+        s.mediaPlaybackRequiresUserGesture = prefs.getBoolean("blockAutoplay", true)
+        s.userAgentString = if (prefs.getBoolean("desktop", false)) desktopUa()
+        else WebSettings.getDefaultUserAgent(this)
+        applyJs(w, current?.url)
+    }
+
+    private fun reloadCurrent() {
+        val t = current?.url ?: return
+        if (t.isBlank() || t == HOME_MARK) {
+            loadUrl(HOME_MARK)
+            return
+        }
+        val w = web ?: return
+        val nu = rewrite(t)
+        applyJs(w, nu)
+        if (nu != t) loadUrl(nu) else w.reload()
+    }
+
+    private fun setUltra(on: Boolean) {
+        val e = prefs.edit().putBoolean("ultra", on)
+        if (on) {
+            e.putBoolean("dataSaver", true).putBoolean("blockAds", true)
+                .putBoolean("blockAutoplay", true).putBoolean("fbRedirect", true)
+                .putBoolean("desktop", false)
+        } else {
+            e.putBoolean("dataSaver", false).putBoolean("fbRedirect", false)
+        }
+        e.apply()
+        dataSaver = prefs.getBoolean("dataSaver", false)
+        blockAds = prefs.getBoolean("blockAds", true)
+        applyWebSettings()
+        reloadCurrent()
+        toast(if (on) "Mode Ultra Ringan aktif" else "Mode Ultra Ringan mati")
+    }
+
+    private fun toggleDataSaver() {
+        dataSaver = !dataSaver
+        prefs.edit().putBoolean("dataSaver", dataSaver).apply()
+        applyWebSettings()
+        reloadCurrent()
+        toast(if (dataSaver) "Gambar diblokir" else "Gambar aktif")
+    }
+
+    private fun toggleAds() {
+        blockAds = !blockAds
+        prefs.edit().putBoolean("blockAds", blockAds).apply()
+        toast(if (blockAds) "Blokir iklan aktif" else "Blokir iklan mati")
+    }
+
+    private fun toggleAutoplay() {
+        val on = !prefs.getBoolean("blockAutoplay", true)
+        prefs.edit().putBoolean("blockAutoplay", on).apply()
+        applyWebSettings()
+        toast(if (on) "Autoplay video diblokir" else "Autoplay video diizinkan")
+    }
+
+    private fun toggleFb() {
+        val on = !prefs.getBoolean("fbRedirect", false)
+        prefs.edit().putBoolean("fbRedirect", on).apply()
+        toast(if (on) "Facebook dialihkan ke m.facebook.com" else "Pengalihan Facebook mati")
+        val h = hostKey(current?.url)
+        if (on && h != null && h in FB_HOSTS) reloadCurrent()
+    }
+
+    private fun toggleDesktop() {
+        val on = !prefs.getBoolean("desktop", false)
+        prefs.edit().putBoolean("desktop", on).apply()
+        applyWebSettings()
+        reloadCurrent()
+        toast(if (on) "Tampilan desktop" else "Tampilan HP")
+    }
+
+    private fun toggleJsForSite() {
+        val h = hostKey(current?.url)
+        if (h == null) {
+            toast("Buka halaman situs dulu")
+            return
+        }
+        val set = jsOffHosts().toMutableSet()
+        if (!set.add(h)) set.remove(h)
+        prefs.edit().putStringSet("jsOff", set).apply()
+        toast("JavaScript $h: ${if (set.contains(h)) "mati" else "aktif"}")
+        reloadCurrent()
+    }
+
+    private fun toggleFsLandscape() {
+        val on = !prefs.getBoolean("fsLandscape", true)
+        prefs.edit().putBoolean("fsLandscape", on).apply()
+        toast(if (on) "Video fullscreen otomatis landscape" else "Video fullscreen mengikuti rotasi")
+    }
+
+    private fun setCurrentAsHome() {
+        val u = current?.url ?: ""
+        if (u.isBlank() || u == HOME_MARK) {
+            toast("Buka dulu halaman yang ingin dijadikan beranda")
+        } else {
+            prefs.edit().putString("homeUrl", u).apply()
+            toast("Beranda diubah ke halaman ini")
+        }
     }
 
     // ------------------------------------------------------------------ beranda
@@ -591,6 +742,7 @@ class MainActivity : Activity() {
             w,
             FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         )
+        applyJs(w, tab.url)
         val st = tab.state
         val restored = tab.url != HOME_MARK && st != null && w.restoreState(st) != null
         if (!restored) {
@@ -779,58 +931,44 @@ class MainActivity : Activity() {
 
     // ------------------------------------------------------------------ menu & bookmark
 
+    private fun showPairs(title: String?, options: List<Pair<String, () -> Unit>>) {
+        val b = AlertDialog.Builder(this)
+        if (title != null) b.setTitle(title)
+        b.setItems(options.map { it.first }.toTypedArray()) { _, i -> options[i].second() }
+        b.show()
+    }
+
     private fun showMenu() {
-        val items = arrayOf(
-            "Bookmark",
-            "Beranda",
-            "Pengaturan beranda",
-            "Jadikan halaman ini beranda",
-            "Video layar penuh",
-            "Video fullscreen otomatis landscape: ${if (prefs.getBoolean("fsLandscape", true)) "AKTIF" else "mati"}",
-            "Download dari URL",
-            "Mode hemat data (blokir gambar): ${if (dataSaver) "AKTIF" else "mati"}",
-            "Blokir iklan: ${if (blockAds) "AKTIF" else "mati"}",
-            "Tab baru",
-            "Hapus data penjelajahan"
+        val ultra = prefs.getBoolean("ultra", false)
+        val items: List<Pair<String, () -> Unit>> = listOf(
+            Pair("Bookmark") { showBookmarks() },
+            Pair("Beranda") { loadUrl(HOME_MARK) },
+            Pair("Video layar penuh") { toggleVideoFullscreen() },
+            Pair("Tab baru") { openInNewTab(HOME_MARK) },
+            Pair("Download dari URL") { askDownloadUrl() },
+            Pair("Mode Ultra Ringan: ${onOff(ultra)}") { setUltra(!ultra) },
+            Pair("Pengaturan…") { showSettingsMenu() }
         )
-        AlertDialog.Builder(this)
-            .setItems(items) { _, i ->
-                when (i) {
-                    0 -> showBookmarks()
-                    1 -> loadUrl(HOME_MARK)
-                    2 -> showHomeSettings()
-                    3 -> {
-                        val u = current?.url ?: ""
-                        if (u.isBlank() || u == HOME_MARK) {
-                            toast("Buka dulu halaman yang ingin dijadikan beranda")
-                        } else {
-                            prefs.edit().putString("homeUrl", u).apply()
-                            toast("Beranda diubah ke halaman ini")
-                        }
-                    }
-                    4 -> toggleVideoFullscreen()
-                    5 -> {
-                        val on = !prefs.getBoolean("fsLandscape", true)
-                        prefs.edit().putBoolean("fsLandscape", on).apply()
-                        toast(if (on) "Video fullscreen otomatis landscape" else "Video fullscreen mengikuti rotasi")
-                    }
-                    6 -> askDownloadUrl()
-                    7 -> {
-                        dataSaver = !dataSaver
-                        prefs.edit().putBoolean("dataSaver", dataSaver).apply()
-                        web?.settings?.blockNetworkImage = dataSaver
-                        toast(if (dataSaver) "Gambar diblokir (muat ulang halaman)" else "Gambar aktif (muat ulang halaman)")
-                    }
-                    8 -> {
-                        blockAds = !blockAds
-                        prefs.edit().putBoolean("blockAds", blockAds).apply()
-                        toast(if (blockAds) "Blokir iklan aktif" else "Blokir iklan mati")
-                    }
-                    9 -> openInNewTab(HOME_MARK)
-                    10 -> clearBrowsingData()
-                }
-            }
-            .show()
+        showPairs(null, items)
+    }
+
+    private fun showSettingsMenu() {
+        val host = hostKey(current?.url)
+        val jsOn = host == null || !jsOffHosts().contains(host)
+        val desk = prefs.getBoolean("desktop", false)
+        val items: List<Pair<String, () -> Unit>> = listOf(
+            Pair("Pengaturan beranda") { showHomeSettings() },
+            Pair("Jadikan halaman ini beranda") { setCurrentAsHome() },
+            Pair("Video fullscreen otomatis landscape: ${onOff(prefs.getBoolean("fsLandscape", true))}") { toggleFsLandscape() },
+            Pair("Mode hemat data (blokir gambar): ${onOff(dataSaver)}") { toggleDataSaver() },
+            Pair("Blokir iklan: ${onOff(blockAds)}") { toggleAds() },
+            Pair("Blokir autoplay video: ${onOff(prefs.getBoolean("blockAutoplay", true))}") { toggleAutoplay() },
+            Pair("Alihkan Facebook ke m.facebook.com: ${onOff(prefs.getBoolean("fbRedirect", false))}") { toggleFb() },
+            Pair("Tampilan: ${if (desk) "Desktop" else "HP"} (ketuk untuk ganti)") { toggleDesktop() },
+            Pair("JavaScript situs ini: ${if (host == null) "-" else onOff(jsOn)}") { toggleJsForSite() },
+            Pair("Hapus data penjelajahan") { clearBrowsingData() }
+        )
+        showPairs("Pengaturan", items)
     }
 
     private fun clearBrowsingData() {
